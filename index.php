@@ -65,8 +65,8 @@ function roll_expression(string $expression): ?array
     foreach ($matches as $m) {
         $sign = ($m[1] ?? '') === '-' ? -1 : 1;
 
-        if (empty($m[3])) { // flat modifier: no "d" in this term
-            $value = (int) $m[6];
+        if (($m[3] ?? '') === '') { // flat modifier: no "d" in this term
+            $value = (int) ($m[6] ?? 0);
             $total += $sign * $value;
             $parts[] = ['text' => ($sign < 0 ? '-' : '+') . $value, 'rolls' => [], 'kept' => [], 'value' => $sign * $value, 'sides' => 0];
             continue;
@@ -121,7 +121,10 @@ function roll_expression(string $expression): ?array
     return ['total' => $total, 'parts' => $parts, 'clean' => $clean];
 }
 
-$expression = isset($_GET['roll']) ? trim((string) $_GET['roll']) : '';
+// ?roll[]=1d6 sends an array; casting it to string leaks an "Array to string conversion" warning
+// into the page, so only a real string is accepted.
+$rawRoll = $_GET['roll'] ?? '';
+$expression = is_string($rawRoll) ? trim($rawRoll) : '';
 $result = $expression !== '' ? roll_expression($expression) : null;
 $showResult = $result !== null;
 
@@ -819,7 +822,10 @@ Elowen</textarea>
       let expr = "1d" + sides;
       if (sides === "20" && mode !== "normal") {
         expr = mode === "adv" ? "2d20kh1" : "2d20kl1";
-      } else if (mod !== 0) {
+      }
+      // The modifier used to be appended only in the "else" branch, so advantage/disadvantage
+      // silently ignored a +N that the UI promises to add.
+      if (mod !== 0) {
         expr += (mod > 0 ? "+" : "") + mod;
       }
       roll(expr);
