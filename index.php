@@ -12,6 +12,25 @@ function h($value): string
 }
 
 /**
+ * Faces that were rolled but not kept, counted as a multiset.
+ * array_diff() is wrong here: rolling [4,4] and keeping one 4 must drop exactly one 4.
+ */
+function dropped_faces(array $rolls, array $kept): array
+{
+    $pool = array_values($kept);
+    $dropped = [];
+    foreach ($rolls as $face) {
+        $index = array_search($face, $pool, true);
+        if ($index === false) {
+            $dropped[] = $face;
+        } else {
+            unset($pool[$index]);
+        }
+    }
+    return $dropped;
+}
+
+/**
  * Parse and roll a dice expression such as:
  *   1d20, d20, 2d6+3, 4d6kh3, 1d8+1d6-1, 2d20kl1
  * Returns ['total' => int, 'parts' => [describe...]] or null when invalid.
@@ -68,7 +87,12 @@ function roll_expression(string $expression): ?array
         $keepMode = $m[4] ?? '';
         $keepCount = $keepMode !== '' && isset($m[5]) && $m[5] !== '' ? (int) $m[5] : null;
 
-        if ($keepMode !== '' && $keepCount !== null && $keepCount >= 1 && $keepCount <= $count) {
+        if ($keepMode !== '' && $keepCount !== null && ($keepCount < 1 || $keepCount > $count)) {
+            // "4d6kh5" cannot mean anything: you cannot keep more dice than you rolled.
+            return null;
+        }
+
+        if ($keepMode !== '' && $keepCount !== null) {
             $sorted = $rolls;
             sort($sorted);
             if ($keepMode === 'h') {
@@ -100,6 +124,12 @@ function roll_expression(string $expression): ?array
 $expression = isset($_GET['roll']) ? trim((string) $_GET['roll']) : '';
 $result = $expression !== '' ? roll_expression($expression) : null;
 $showResult = $result !== null;
+
+// The server also rolls for no-JS visitors and for shared links, so a rejected expression has to
+// explain itself instead of silently re-rendering an empty result panel.
+$error = $expression !== '' && $result === null
+    ? 'That is not a valid dice expression — try 2d6+3, 4d6kh3, or 1d20+5.'
+    : '';
 
 $crit = '';
 if ($result !== null) {
@@ -449,8 +479,8 @@ $diceTable = [
           $bits = [];
           foreach ($result['parts'] as $part) {
               $line = $part['text'] . ' → ' . implode(', ', $part['kept']);
-              if ($part['rolls'] !== [] && $part['kept'] !== $part['rolls']) {
-                  $dropped = array_values(array_diff($part['rolls'], $part['kept']));
+              if ($part['rolls'] !== [] && count($part['kept']) !== count($part['rolls'])) {
+                  $dropped = dropped_faces($part['rolls'], $part['kept']);
                   $line .= ' (dropped ' . implode(', ', $dropped) . ')';
               }
               $bits[] = $line;
@@ -495,7 +525,7 @@ $diceTable = [
         <label for="roll">Expression</label>
         <input type="text" id="roll" name="roll" placeholder="2d6+3, 4d6kh3, 1d8+1d6" value="<?= h($expression) ?>" autocomplete="off" spellcheck="false">
         <button class="go" type="submit">Roll</button>
-        <span class="msg" id="status" role="status" aria-live="polite"></span>
+        <span class="msg<?= $error !== '' ? ' err' : '' ?>" id="status" role="status" aria-live="polite"><?= h($error) ?></span>
       </form>
 
       <div class="presets">
@@ -676,10 +706,10 @@ Elowen</textarea>
       let kept = rolls.slice();
       if (m[4] && m[5] !== undefined) {
         const k = parseInt(m[5], 10);
-        if (k >= 1 && k <= count) {
-          const sorted = rolls.slice().sort((a, b) => a - b);
-          kept = m[4] === "h" ? sorted.slice(-k) : sorted.slice(0, k);
-        }
+        // "4d6kh5" means nothing: you cannot keep more dice than you rolled.
+        if (k < 1 || k > count) return null;
+        const sorted = rolls.slice().sort((a, b) => a - b);
+        kept = m[4] === "h" ? sorted.slice(-k) : sorted.slice(0, k);
       }
 
       const sum = kept.reduce((a, b) => a + b, 0);
@@ -713,11 +743,23 @@ Elowen</textarea>
     return "";
   }
 
+  // Faces rolled but not kept, as a multiset. A plain filter() drops every copy of a duplicated
+  // face: rolling [4,4] and keeping one 4 must report a single dropped 4, not two.
+  function droppedFaces(rolls, kept) {
+    const pool = kept.slice();
+    const dropped = [];
+    for (const face of rolls) {
+      const i = pool.indexOf(face);
+      if (i === -1) dropped.push(face);
+      else pool.splice(i, 1);
+    }
+    return dropped;
+  }
+
   function describe(part) {
     let line = part.text + " → " + part.kept.join(", ");
     if (part.rolls.length && part.kept.length !== part.rolls.length) {
-      const dropped = part.rolls.filter((v) => !part.kept.includes(v));
-      line += " (dropped " + dropped.join(", ") + ")";
+      line += " (dropped " + droppedFaces(part.rolls, part.kept).join(", ") + ")";
     }
     return line;
   }
